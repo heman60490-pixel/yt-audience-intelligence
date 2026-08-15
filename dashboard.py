@@ -93,12 +93,19 @@ if not groq_key or not yt_key:
 client = Groq(api_key=groq_key)
 
 # ---------------------------------------------------------
-# 3. Data Processing & API Calls
+# 3. Helper Functions & Data Fetching
 # ---------------------------------------------------------
 def extract_video_id(url: str) -> str:
+    """Extract standard, share, or short YouTube video ID from URL."""
     pattern = r"(?:v=|\/|youtu\.be\/)([0-9A-Za-z_-]{11})"
     match = re.search(pattern, url)
     return match.group(1) if match else None
+
+def sanitize_for_pdf(text: str) -> str:
+    """Sanitize non-Latin1 characters (Hindi, Devanagari, emojis, special unicode) to prevent FPDF crash."""
+    if not text:
+        return ""
+    return text.encode("latin-1", errors="replace").decode("latin-1").replace("?", " ")
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_youtube_data(video_id: str, api_key: str, max_comments: int = 150):
@@ -189,17 +196,20 @@ def run_groq_intelligence(comments: list, video_title: str) -> dict:
     return json.loads(response.choices[0].message.content)
 
 def generate_pdf_report(video_title, channel_title, kpis, clusters, blueprint):
-    """Generate a clean executive PDF report using FPDF."""
+    """Generate a clean executive PDF report using FPDF with Unicode safety."""
     pdf = FPDF()
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=15)
+    
+    safe_title = sanitize_for_pdf(video_title)
+    safe_channel = sanitize_for_pdf(channel_title)
     
     # Title Header
     pdf.set_font("Helvetica", "B", 18)
     pdf.cell(0, 10, "Audience Intelligence Executive Summary", ln=True, align="C")
     pdf.set_font("Helvetica", "I", 10)
-    pdf.cell(0, 6, f"Generated for: {video_title[:65]}...", ln=True, align="C")
-    pdf.cell(0, 6, f"Channel: {channel_title}", ln=True, align="C")
+    pdf.cell(0, 6, f"Generated for: {safe_title[:65]}...", ln=True, align="C")
+    pdf.cell(0, 6, f"Channel: {safe_channel}", ln=True, align="C")
     pdf.ln(8)
     
     # KPI Section
@@ -207,8 +217,8 @@ def generate_pdf_report(video_title, channel_title, kpis, clusters, blueprint):
     pdf.cell(0, 8, "1. Core Metrics & Audience Vibe", ln=True)
     pdf.set_font("Helvetica", "", 10)
     pdf.cell(0, 6, f"- Net Sentiment Score: {kpis.get('sentiment_score', 'N/A')}% Positive", ln=True)
-    pdf.cell(0, 6, f"- Dominant Intent: {kpis.get('dominant_intent', 'N/A')}", ln=True)
-    pdf.cell(0, 6, f"- Audience Vibe: {kpis.get('audience_vibe', 'N/A')}", ln=True)
+    pdf.cell(0, 6, f"- Dominant Intent: {sanitize_for_pdf(str(kpis.get('dominant_intent', 'N/A')))}", ln=True)
+    pdf.cell(0, 6, f"- Audience Vibe: {sanitize_for_pdf(str(kpis.get('audience_vibe', 'N/A')))}", ln=True)
     pdf.ln(6)
     
     # Sentiment Clusters
@@ -216,7 +226,10 @@ def generate_pdf_report(video_title, channel_title, kpis, clusters, blueprint):
     pdf.cell(0, 8, "2. Intent & Sentiment Breakdown", ln=True)
     pdf.set_font("Helvetica", "", 10)
     for c in clusters:
-        pdf.cell(0, 6, f"- {c.get('category')}: {c.get('percentage')}% | {c.get('summary')}", ln=True)
+        cat = sanitize_for_pdf(c.get('category', ''))
+        summary = sanitize_for_pdf(c.get('summary', ''))
+        pct = c.get('percentage', 0)
+        pdf.cell(0, 6, f"- {cat}: {pct}% | {summary}", ln=True)
     pdf.ln(6)
     
     # Action Blueprint
@@ -224,7 +237,8 @@ def generate_pdf_report(video_title, channel_title, kpis, clusters, blueprint):
     pdf.cell(0, 8, "3. Next Steps & Growth Blueprint", ln=True)
     pdf.set_font("Helvetica", "", 10)
     for idx, step in enumerate(blueprint, 1):
-        pdf.multi_cell(0, 6, f"{idx}. {step}")
+        safe_step = sanitize_for_pdf(step)
+        pdf.multi_cell(0, 6, f"{idx}. {safe_step}")
         
     return bytes(pdf.output())
 
