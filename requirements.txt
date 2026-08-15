@@ -6,3 +6,5 @@ pandas
 altair
 fpdf2
 plotly
+wordcloud
+matplotlib
