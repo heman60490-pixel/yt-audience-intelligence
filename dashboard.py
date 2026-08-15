@@ -1,24 +1,20 @@
 import os
 import re
 import json
-import io
 import unicodedata
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 import streamlit as st
-import matplotlib.pyplot as plt
-from wordcloud import WordCloud, STOPWORDS
 from fpdf import FPDF
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from groq import Groq
 
 # ---------------------------------------------------------
-# 1. Page Configuration & Professional CSS
+# 1. Page Configuration & Minimalist Dark UI
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="YouTube Audience Intelligence Suite",
+    page_title="YouTube Audience Intelligence",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -26,7 +22,7 @@ st.set_page_config(
 
 custom_styling = """
 <style>
-    /* Complete cleanup of Streamlit Cloud default headers & badges */
+    /* Complete suppression of default Streamlit cloud chrome */
     #MainMenu, header, footer, [data-testid="stDecoration"] {visibility: hidden !important; display: none !important;}
     [data-testid="stStatusWidget"], div[class*="viewerBadge"], [data-testid="stViewerBadge"] {display: none !important;}
     div[class*="profile"], div[data-testid="stBottomBlockContainer"], [data-testid="stToolbar"] {display: none !important;}
@@ -35,146 +31,119 @@ custom_styling = """
     .block-container {
         padding-top: 1.5rem !important;
         padding-bottom: 2rem !important;
-        max-width: 95% !important;
+        max-width: 92% !important;
     }
     
-    /* SaaS Metric Cards */
+    /* Sleek KPI Cards */
     .kpi-card {
-        background: linear-gradient(145deg, #161b26, #0f131c);
+        background: #161b26;
         border: 1px solid #232d3f;
-        border-radius: 10px;
-        padding: 16px 20px;
+        border-radius: 8px;
+        padding: 14px 18px;
         text-align: center;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
     }
     .kpi-title {
-        font-size: 0.85rem;
+        font-size: 0.8rem;
         color: #8b9bb4;
         text-transform: uppercase;
         letter-spacing: 0.05em;
-        margin-bottom: 6px;
+        margin-bottom: 4px;
     }
     .kpi-value {
-        font-size: 1.6rem;
+        font-size: 1.4rem;
         font-weight: 700;
         color: #00d2ff;
     }
     
-    /* Insight Cards */
-    .insight-card {
+    /* Content & Feedback Cards */
+    .content-box {
         background-color: #161a24;
         border: 1px solid #232a3b;
-        border-left: 4px solid #00d2ff;
         border-radius: 8px;
-        padding: 14px 18px;
-        margin-bottom: 12px;
+        padding: 14px 16px;
+        margin-bottom: 10px;
     }
 </style>
 """
 st.markdown(custom_styling, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. Key Management (Secrets + Sidebar Fallback)
+# 2. API Key Management
 # ---------------------------------------------------------
 groq_key = st.secrets.get("GROQ_API_KEY", os.getenv("GROQ_API_KEY", ""))
 yt_key = st.secrets.get("YOUTUBE_API_KEY", os.getenv("YOUTUBE_API_KEY", ""))
 
 if not groq_key or not yt_key:
     with st.sidebar:
-        st.subheader("🔑 API Configuration")
+        st.subheader("🔑 API Key Setup")
         if not groq_key:
             groq_key = st.text_input("Groq API Key", type="password")
         if not yt_key:
             yt_key = st.text_input("YouTube API Key", type="password")
 
 if not groq_key or not yt_key:
-    st.warning("⚠️ Please configure **GROQ_API_KEY** and **YOUTUBE_API_KEY** to start.")
+    st.warning("⚠️ Please provide **GROQ_API_KEY** and **YOUTUBE_API_KEY** to analyze videos.")
     st.stop()
 
 client = Groq(api_key=groq_key)
 
 # ---------------------------------------------------------
-# 3. Helper Functions & Bulletproof PDF Generator
+# 3. Helpers & Processing
 # ---------------------------------------------------------
 def extract_video_id(url: str) -> str:
-    """Extract standard, share, or short YouTube video ID from URL."""
     pattern = r"(?:v=|\/|youtu\.be\/)([0-9A-Za-z_-]{11})"
     match = re.search(pattern, url)
     return match.group(1) if match else None
 
 def clean_pdf_text(text: str) -> str:
-    """Strip all non-ASCII, non-printable characters for standard FPDF core fonts."""
     if not text:
         return ""
-    # Normalize unicode characters
     norm = unicodedata.normalize('NFKD', str(text))
-    # Convert to pure ASCII, replace unknown characters with space
     ascii_text = norm.encode('ascii', 'ignore').decode('ascii')
-    # Remove unwanted whitespace / control characters
     clean = re.sub(r'[\r\n\t]+', ' ', ascii_text)
-    clean = re.sub(r'\s+', ' ', clean).strip()
-    return clean if clean else "N/A"
+    return re.sub(r'\s+', ' ', clean).strip()
 
-def generate_pdf_report(video_title, channel_title, kpis, clusters, blueprint):
-    """Generate executive PDF report using FPDF with effective page width boundaries."""
+def generate_pdf_report(video_title, channel_title, kpis, clusters, ideas):
     try:
         pdf = FPDF(format="A4", unit="mm")
         pdf.set_auto_page_break(auto=True, margin=15)
         pdf.add_page()
-        
-        # Effective width inside margins (A4 = 210mm, default margins = 10mm each side -> 190mm)
         epw = pdf.epw
         
-        safe_title = clean_pdf_text(video_title)
-        safe_channel = clean_pdf_text(channel_title)
-        
-        # Title Header
+        # Header
         pdf.set_font("Helvetica", "B", 16)
-        pdf.cell(epw, 10, "Audience Intelligence Executive Summary", ln=True, align="C")
-        
+        pdf.cell(epw, 10, "Creator Intelligence Report", ln=True, align="C")
         pdf.set_font("Helvetica", "I", 9)
-        pdf.cell(epw, 5, f"Target Video: {safe_title[:80]}", ln=True, align="C")
-        pdf.cell(epw, 5, f"Channel: {safe_channel}", ln=True, align="C")
+        pdf.cell(epw, 5, f"Video: {clean_pdf_text(video_title)[:75]}...", ln=True, align="C")
+        pdf.cell(epw, 5, f"Channel: {clean_pdf_text(channel_title)}", ln=True, align="C")
         pdf.ln(6)
         
-        # 1. KPI Section
-        pdf.set_font("Helvetica", "B", 13)
-        pdf.cell(epw, 7, "1. Core Intelligence & Audience Vibe", ln=True)
+        # KPIs
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.cell(epw, 7, "1. Audience Sentiment & Pulse", ln=True)
         pdf.set_font("Helvetica", "", 10)
-        pdf.cell(epw, 6, f"- Net Sentiment Score: {kpis.get('sentiment_score', 'N/A')}% Positive", ln=True)
-        pdf.cell(epw, 6, f"- Dominant Intent: {clean_pdf_text(kpis.get('dominant_intent', 'N/A'))}", ln=True)
+        pdf.cell(epw, 6, f"- Net Sentiment: {kpis.get('sentiment_score', 'N/A')}% Positive", ln=True)
         pdf.cell(epw, 6, f"- Audience Vibe: {clean_pdf_text(kpis.get('audience_vibe', 'N/A'))}", ln=True)
-        pdf.ln(5)
+        pdf.ln(4)
         
-        # 2. Intent & Clusters
-        pdf.set_font("Helvetica", "B", 13)
-        pdf.cell(epw, 7, "2. Intent & Sentiment Breakdown", ln=True)
+        # Clusters
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.cell(epw, 7, "2. Top Audience Feedback", ln=True)
         pdf.set_font("Helvetica", "", 10)
         for c in clusters:
-            cat = clean_pdf_text(c.get('category', ''))
-            summary = clean_pdf_text(c.get('summary', ''))
-            pct = c.get('percentage', 0)
-            pdf.multi_cell(epw, 6, f"- {cat} ({pct}%): {summary}")
-        pdf.ln(5)
+            pdf.multi_cell(epw, 6, f"- {clean_pdf_text(c.get('category'))} ({c.get('percentage')}%): {clean_pdf_text(c.get('summary'))}")
+        pdf.ln(4)
         
-        # 3. Action Blueprint
-        pdf.set_font("Helvetica", "B", 13)
-        pdf.cell(epw, 7, "3. Next Steps & Growth Blueprint", ln=True)
+        # Ideas
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.cell(epw, 7, "3. Recommended Content Opportunities", ln=True)
         pdf.set_font("Helvetica", "", 10)
-        for idx, step in enumerate(blueprint, 1):
-            safe_step = clean_pdf_text(step)
-            pdf.multi_cell(epw, 6, f"{idx}. {safe_step}")
+        for idx, idea in enumerate(ideas, 1):
+            pdf.multi_cell(epw, 6, f"{idx}. {clean_pdf_text(idea)}")
             
         return bytes(pdf.output())
-    except Exception as e:
-        # Fallback simple error text PDF in case of any OS/font issues
-        fallback_pdf = FPDF()
-        fallback_pdf.add_page()
-        fallback_pdf.set_font("Helvetica", "B", 12)
-        fallback_pdf.cell(0, 10, "Audience Intelligence Summary (Text Export)", ln=True)
-        fallback_pdf.set_font("Helvetica", "", 10)
-        fallback_pdf.multi_cell(0, 6, f"Video: {clean_pdf_text(video_title)}")
-        return bytes(fallback_pdf.output())
+    except Exception:
+        return b""
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_youtube_data(video_id: str, api_key: str, max_comments: int = 150):
@@ -212,7 +181,7 @@ def fetch_youtube_data(video_id: str, api_key: str, max_comments: int = 150):
 
     except HttpError as e:
         if e.resp.status == 403:
-            st.error("⚠️ YouTube API Quota limit reached or invalid API Key.")
+            st.error("⚠️ YouTube API Quota exhausted for today.")
         else:
             st.error(f"⚠️ YouTube API Error: {str(e)}")
         return None, None, None
@@ -223,34 +192,22 @@ def fetch_youtube_data(video_id: str, api_key: str, max_comments: int = 150):
 @st.cache_data(ttl=86400, show_spinner=False)
 def run_groq_intelligence(comments: list, video_title: str) -> dict:
     prompt = f"""
-    You are an expert Audience Intelligence Analyst.
-    Analyze the following {len(comments)} YouTube comments for the video: "{video_title}".
-    Note: Understand Hinglish, Hindi in Roman/Devanagari script, slang, and English contextually.
+    You are a YouTube Content & Audience Growth Strategist.
+    Analyze these {len(comments)} comments for the video: "{video_title}".
+    Account for Hinglish, Hindi in Roman/Devanagari, and English context.
 
-    Provide deep strategic synthesis in pure JSON with keys:
+    Provide a clean, focused strategic response in JSON with:
     1. "kpis": {{
          "sentiment_score": (int 0-100),
-         "dominant_intent": (string, e.g. "Actionable Learning / Technical Curiosity"),
-         "audience_vibe": (string, e.g. "Supportive & Inquisitive")
+         "audience_vibe": (short string, e.g. "Inspired & Enthusiastic"),
+         "primary_takeaway": (short 1-sentence synthesis)
        }}
-    2. "clusters": List of objects with keys "category", "percentage" (number summing up to 100), "summary".
-    3. "demand_share": List of specific topics viewers demand most.
-    4. "competitor_gaps": Unmet needs, missing explanations, or comparison angles.
-    5. "shorts_polls": {{
-         "shorts": [
-           {{"hook": "string", "core_concept": "string", "cta": "string"}},
-           {{"hook": "string", "core_concept": "string", "cta": "string"}},
-           {{"hook": "string", "core_concept": "string", "cta": "string"}}
-         ],
-         "polls": [
-           {{"question": "string", "options": ["opt1", "opt2", "opt3", "opt4"]}},
-           {{"question": "string", "options": ["opt1", "opt2", "opt3", "opt4"]}}
-         ]
-       }}
-    6. "doubts_myths": Top doubts or misconceptions raised in comments.
-    7. "action_blueprint": 4 concrete next steps for the creator.
+    2. "clusters": List of 3-4 objects with "category", "percentage", "summary".
+    3. "content_opportunities": List of 3 actionable follow-up video or topic ideas based on demand.
+    4. "shorts_concepts": List of 2 ready-to-shoot Shorts ideas with "hook" and "core_point".
+    5. "top_questions_doubts": List of 3 real questions or confusions viewers asked.
 
-    Comments:
+    Comments Sample:
     {json.dumps(comments[:120], ensure_ascii=False)}
 
     Output STRICTLY raw JSON only.
@@ -267,27 +224,24 @@ def run_groq_intelligence(comments: list, video_title: str) -> dict:
 # ---------------------------------------------------------
 # 4. Header UI
 # ---------------------------------------------------------
-st.markdown("## ⚡ YouTube Audience Intelligence Suite")
-st.caption("AI-Powered Semantic Clustering, Gap Arbitrage & Creator Action Blueprints")
+st.markdown("### ⚡ YouTube Audience Intelligence")
 
-col_url, col_mode, col_btn = st.columns([5, 3, 2])
+col_url, col_btn = st.columns([6, 2])
 with col_url:
     yt_input_url = st.text_input("URL", placeholder="Paste YouTube Video URL...", label_visibility="collapsed")
-with col_mode:
-    mode_selected = st.selectbox("Mode", ["🎯 Single Video Deep Dive", "⚔️ Competitor Gap Mining"], label_visibility="collapsed")
 with col_btn:
-    analyze_pressed = st.button("🚀 Analyze Insights", use_container_width=True, type="primary")
+    analyze_pressed = st.button("🚀 Analyze Video", use_container_width=True, type="primary")
 
 # ---------------------------------------------------------
-# 5. Pipeline Execution
+# 5. Dashboard Output
 # ---------------------------------------------------------
 if analyze_pressed and yt_input_url:
     vid_id = extract_video_id(yt_input_url)
     if not vid_id:
-        st.error("Please provide a valid YouTube URL.")
+        st.error("Please enter a valid YouTube link.")
         st.stop()
         
-    with st.spinner("Analyzing comments with Groq Llama-3.3-70B..."):
+    with st.spinner("Analyzing audience feedback with AI..."):
         video_details, video_stats, comments = fetch_youtube_data(vid_id, yt_key)
         
         if not video_details or not comments:
@@ -308,158 +262,101 @@ if "insights" in st.session_state:
 
     st.markdown("---")
     
-    # Video Card
+    # Clean Video Overview Bar
     v1, v2, v3 = st.columns([2, 5, 2])
     with v1:
         st.image(vid_meta["thumbnails"]["high"]["url"], use_container_width=True)
     with v2:
         st.subheader(vid_meta.get("title", ""))
         st.caption(f"Channel: **{vid_meta.get('channelTitle', '')}** | Views: **{int(vid_stats.get('viewCount', 0)):,}**")
+        st.info(f"💡 **Takeaway:** {kpis.get('primary_takeaway', '')}")
     with v3:
-        st.markdown(f"#### Analyzed")
-        st.markdown(f"### **{len(comments)} Comments**")
-
-    # KPI Metric Cards
-    k1, k2, k3 = st.columns(3)
-    with k1:
         st.markdown(f"""
         <div class="kpi-card">
-            <div class="kpi-title">Audience Sentiment Index</div>
-            <div class="kpi-value">{kpis.get('sentiment_score', 80)}%</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with k2:
-        st.markdown(f"""
-        <div class="kpi-card">
-            <div class="kpi-title">Dominant Audience Intent</div>
-            <div class="kpi-value" style="font-size: 1.1rem; color: #29B5E8; margin-top: 6px;">{kpis.get('dominant_intent', 'Learning')}</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with k3:
-        st.markdown(f"""
-        <div class="kpi-card">
-            <div class="kpi-title">Audience Vibe</div>
-            <div class="kpi-value" style="font-size: 1.1rem; color: #00CC96; margin-top: 6px;">{kpis.get('audience_vibe', 'Supportive')}</div>
+            <div class="kpi-title">Audience Sentiment</div>
+            <div class="kpi-value">{kpis.get('sentiment_score', 85)}% Positive</div>
+            <div style="font-size: 0.85rem; color: #8b9bb4; margin-top: 4px;">{kpis.get('audience_vibe', 'Supportive')}</div>
         </div>
         """, unsafe_allow_html=True)
 
-    st.markdown("<br>", unsafe_allow_html=True)
+    # Simplified 3 Core Tabs
+    tab_feedback, tab_ideas, tab_comments = st.tabs([
+        "📊 Audience Sentiment & Feedback",
+        "🚀 Next Video Ideas & Shorts",
+        "💬 Viewer Questions & Comments"
+    ])
 
-    # Export Bar
+    # Tab 1: Feedback & Clusters
+    with tab_feedback:
+        col_chart, col_list = st.columns([1, 1])
+        clusters = insights.get("clusters", [])
+        
+        with col_chart:
+            if clusters:
+                df_c = pd.DataFrame(clusters)
+                fig = px.pie(
+                    df_c, names="category", values="percentage", hole=0.6,
+                    color_discrete_sequence=["#00d2ff", "#29B5E8", "#FFAA00", "#FF4B4B"]
+                )
+                fig.update_layout(
+                    margin=dict(t=10, b=10, l=10, r=10),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    font=dict(color="#ffffff"),
+                    showlegend=True
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                
+        with col_list:
+            st.markdown("#### What Viewers Are Saying")
+            for item in clusters:
+                st.markdown(f"""
+                <div class="content-box">
+                    <strong>{item.get('category')} ({item.get('percentage')}%)</strong>
+                    <p style="color: #a0aec0; margin: 4px 0 0 0; font-size: 0.9rem;">{item.get('summary')}</p>
+                </div>
+                """, unsafe_allow_html=True)
+
+    # Tab 2: Actionable Next Video Ideas & Shorts
+    with tab_ideas:
+        c_idea1, c_idea2 = st.columns(2)
+        
+        with c_idea1:
+            st.markdown("#### 🎯 Next Long-Form Video Opportunities")
+            for opp in insights.get("content_opportunities", []):
+                st.success(f"💡 {opp}")
+                
+        with c_idea2:
+            st.markdown("#### 🎬 Ready-to-Shoot Shorts Concepts")
+            for s in insights.get("shorts_concepts", []):
+                st.markdown(f"""
+                <div class="content-box">
+                    <strong style="color: #00d2ff;">Hook:</strong> "{s.get('hook', '')}"<br>
+                    <span style="color: #cbd5e1; font-size: 0.9rem;"><strong>Angle:</strong> {s.get('core_point', '')}</span>
+                </div>
+                """, unsafe_allow_html=True)
+
+    # Tab 3: Questions & Comments
+    with tab_comments:
+        st.markdown("#### ❓ Top Questions & Confusions from Viewers")
+        for q in insights.get("top_questions_doubts", []):
+            st.warning(f"🔍 {q}")
+            
+        st.markdown("---")
+        with st.expander("📄 View All Fetched Comments"):
+            st.dataframe(pd.DataFrame(comments, columns=["Comment Text"]), use_container_width=True)
+
+    # Clean Download Options at Bottom
+    st.markdown("---")
+    down_col1, down_col2 = st.columns([1, 1])
     pdf_bytes = generate_pdf_report(
         vid_meta.get("title", ""),
         vid_meta.get("channelTitle", ""),
         kpis,
         insights.get("clusters", []),
-        insights.get("action_blueprint", [])
+        insights.get("content_opportunities", [])
     )
-    
-    d1, d2, d3 = st.columns(3)
-    with d1:
-        st.download_button("📥 Download Executive PDF", data=pdf_bytes, file_name="Audience_Report.pdf", mime="application/pdf", use_container_width=True)
-    with d2:
-        st.download_button("📄 Download JSON Summary", data=json.dumps(insights, indent=2), file_name="insights.json", mime="application/json", use_container_width=True)
-    with d3:
-        st.download_button("📝 Download Comments (.txt)", data="\n\n".join(comments), file_name="comments.txt", mime="text/plain", use_container_width=True)
-
-    st.markdown("---")
-
-    # Tabs Section
-    tabs = st.tabs([
-        "📊 Sentiment & Clusters",
-        "☁️ Word Cloud & Topics",
-        "📈 Demand Share",
-        "⚔️ Competitor Gaps",
-        "📱 Shorts & Polls Studio",
-        "❓ Doubts & Myths",
-        "📋 Action Blueprint",
-        "💬 Raw Comments"
-    ])
-
-    # Tab 1: Sentiment Donut & Cards
-    with tabs[0]:
-        st.subheader("Audience Intent & Sentiment Clusters")
-        clusters = insights.get("clusters", [])
-        if clusters:
-            df_c = pd.DataFrame(clusters)
-            fig = px.pie(
-                df_c, names="category", values="percentage", hole=0.55,
-                color_discrete_sequence=["#00d2ff", "#FF4B4B", "#FFAA00", "#00CC96"]
-            )
-            fig.update_layout(
-                margin=dict(t=10, b=10, l=10, r=10),
-                paper_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#ffffff")
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-            for item in clusters:
-                st.markdown(f"""
-                <div class="insight-card">
-                    <h4>{item.get('category')} — {item.get('percentage')}%</h4>
-                    <p style="color: #94a3b8; margin: 0;">{item.get('summary')}</p>
-                </div>
-                """, unsafe_allow_html=True)
-
-    # Tab 2: Word Cloud & Keywords
-    with tabs[1]:
-        st.subheader("Audience Keyword Cloud & Frequent Terms")
-        all_text = " ".join(comments)
-        stopwords = set(STOPWORDS)
-        stopwords.update(["video", "channel", "sir", "bhai", "hai", "karo", "karein", "aap", "the", "and"])
-        
-        try:
-            wc = WordCloud(width=800, height=350, background_color="#0e1117", stopwords=stopwords, colormap="Blues").generate(all_text)
-            fig_wc, ax = plt.subplots(figsize=(10, 4.5))
-            ax.imshow(wc, interpolation='bilinear')
-            ax.axis("off")
-            fig_wc.patch.set_facecolor('#0e1117')
-            st.pyplot(fig_wc)
-        except Exception:
-            st.info("Not enough text data to render word cloud.")
-
-    # Tab 3: Demand Share
-    with tabs[2]:
-        st.subheader("High-Demand Topic Inquiries")
-        for d in insights.get("demand_share", []):
-            st.info(f"💡 {d}")
-
-    # Tab 4: Competitor Gaps
-    with tabs[3]:
-        st.subheader("Unmet Needs & Competitor Gap Arbitrage")
-        for g in insights.get("competitor_gaps", []):
-            st.warning(f"🔍 {g}")
-
-    # Tab 5: Shorts & Polls Studio
-    with tabs[4]:
-        st.subheader("Viral Shorts & Community Poll Concepts")
-        sp = insights.get("shorts_polls", {})
-        
-        st.markdown("#### 🎬 Ready-to-Shoot Shorts")
-        for idx, short in enumerate(sp.get("shorts", []), 1):
-            with st.expander(f"Short #{idx}: {short.get('hook', '')}", expanded=True):
-                st.markdown(f"**Concept:** {short.get('core_concept', '')}")
-                st.markdown(f"**Call to Action:** `{short.get('cta', '')}`")
-                
-        st.markdown("#### 📊 Community Poll Questions")
-        for idx, poll in enumerate(sp.get("polls", []), 1):
-            with st.expander(f"Poll #{idx}: {poll.get('question', '')}", expanded=True):
-                for opt in poll.get("options", []):
-                    st.write(f"▫️ {opt}")
-
-    # Tab 6: Doubts & Myths
-    with tabs[5]:
-        st.subheader("Audience Misconceptions & Doubts")
-        for doubt in insights.get("doubts_myths", []):
-            st.error(f"❓ {doubt}")
-
-    # Tab 7: Action Blueprint
-    with tabs[6]:
-        st.subheader("Strategic Next Steps for Growth")
-        for step in insights.get("action_blueprint", []):
-            st.success(f"✅ {step}")
-
-    # Tab 8: Raw Comments
-    with tabs[7]:
-        st.subheader("Fetched Raw Comments Dataset")
-        st.dataframe(pd.DataFrame(comments, columns=["Comment Text"]), use_container_width=True)
+    with down_col1:
+        if pdf_bytes:
+            st.download_button("📥 Download Executive Summary PDF", data=pdf_bytes, file_name="Audience_Summary.pdf", mime="application/pdf", use_container_width=True)
+    with down_col2:
+        st.download_button("📄 Download Raw Comments (.txt)", data="\n\n".join(comments), file_name="comments.txt", mime="text/plain", use_container_width=True)
