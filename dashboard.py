@@ -2,6 +2,7 @@ import os
 import re
 import json
 import io
+import unicodedata
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -93,7 +94,7 @@ if not groq_key or not yt_key:
 client = Groq(api_key=groq_key)
 
 # ---------------------------------------------------------
-# 3. Helper Functions & Data Fetching
+# 3. Helper Functions & Bulletproof PDF Generator
 # ---------------------------------------------------------
 def extract_video_id(url: str) -> str:
     """Extract standard, share, or short YouTube video ID from URL."""
@@ -101,11 +102,79 @@ def extract_video_id(url: str) -> str:
     match = re.search(pattern, url)
     return match.group(1) if match else None
 
-def sanitize_for_pdf(text: str) -> str:
-    """Sanitize non-Latin1 characters (Hindi, Devanagari, emojis, special unicode) to prevent FPDF crash."""
+def clean_pdf_text(text: str) -> str:
+    """Strip all non-ASCII, non-printable characters for standard FPDF core fonts."""
     if not text:
         return ""
-    return text.encode("latin-1", errors="replace").decode("latin-1").replace("?", " ")
+    # Normalize unicode characters
+    norm = unicodedata.normalize('NFKD', str(text))
+    # Convert to pure ASCII, replace unknown characters with space
+    ascii_text = norm.encode('ascii', 'ignore').decode('ascii')
+    # Remove unwanted whitespace / control characters
+    clean = re.sub(r'[\r\n\t]+', ' ', ascii_text)
+    clean = re.sub(r'\s+', ' ', clean).strip()
+    return clean if clean else "N/A"
+
+def generate_pdf_report(video_title, channel_title, kpis, clusters, blueprint):
+    """Generate executive PDF report using FPDF with effective page width boundaries."""
+    try:
+        pdf = FPDF(format="A4", unit="mm")
+        pdf.set_auto_page_break(auto=True, margin=15)
+        pdf.add_page()
+        
+        # Effective width inside margins (A4 = 210mm, default margins = 10mm each side -> 190mm)
+        epw = pdf.epw
+        
+        safe_title = clean_pdf_text(video_title)
+        safe_channel = clean_pdf_text(channel_title)
+        
+        # Title Header
+        pdf.set_font("Helvetica", "B", 16)
+        pdf.cell(epw, 10, "Audience Intelligence Executive Summary", ln=True, align="C")
+        
+        pdf.set_font("Helvetica", "I", 9)
+        pdf.cell(epw, 5, f"Target Video: {safe_title[:80]}", ln=True, align="C")
+        pdf.cell(epw, 5, f"Channel: {safe_channel}", ln=True, align="C")
+        pdf.ln(6)
+        
+        # 1. KPI Section
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.cell(epw, 7, "1. Core Intelligence & Audience Vibe", ln=True)
+        pdf.set_font("Helvetica", "", 10)
+        pdf.cell(epw, 6, f"- Net Sentiment Score: {kpis.get('sentiment_score', 'N/A')}% Positive", ln=True)
+        pdf.cell(epw, 6, f"- Dominant Intent: {clean_pdf_text(kpis.get('dominant_intent', 'N/A'))}", ln=True)
+        pdf.cell(epw, 6, f"- Audience Vibe: {clean_pdf_text(kpis.get('audience_vibe', 'N/A'))}", ln=True)
+        pdf.ln(5)
+        
+        # 2. Intent & Clusters
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.cell(epw, 7, "2. Intent & Sentiment Breakdown", ln=True)
+        pdf.set_font("Helvetica", "", 10)
+        for c in clusters:
+            cat = clean_pdf_text(c.get('category', ''))
+            summary = clean_pdf_text(c.get('summary', ''))
+            pct = c.get('percentage', 0)
+            pdf.multi_cell(epw, 6, f"- {cat} ({pct}%): {summary}")
+        pdf.ln(5)
+        
+        # 3. Action Blueprint
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.cell(epw, 7, "3. Next Steps & Growth Blueprint", ln=True)
+        pdf.set_font("Helvetica", "", 10)
+        for idx, step in enumerate(blueprint, 1):
+            safe_step = clean_pdf_text(step)
+            pdf.multi_cell(epw, 6, f"{idx}. {safe_step}")
+            
+        return bytes(pdf.output())
+    except Exception as e:
+        # Fallback simple error text PDF in case of any OS/font issues
+        fallback_pdf = FPDF()
+        fallback_pdf.add_page()
+        fallback_pdf.set_font("Helvetica", "B", 12)
+        fallback_pdf.cell(0, 10, "Audience Intelligence Summary (Text Export)", ln=True)
+        fallback_pdf.set_font("Helvetica", "", 10)
+        fallback_pdf.multi_cell(0, 6, f"Video: {clean_pdf_text(video_title)}")
+        return bytes(fallback_pdf.output())
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_youtube_data(video_id: str, api_key: str, max_comments: int = 150):
@@ -194,53 +263,6 @@ def run_groq_intelligence(comments: list, video_title: str) -> dict:
         response_format={"type": "json_object"}
     )
     return json.loads(response.choices[0].message.content)
-
-def generate_pdf_report(video_title, channel_title, kpis, clusters, blueprint):
-    """Generate a clean executive PDF report using FPDF with Unicode safety."""
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    
-    safe_title = sanitize_for_pdf(video_title)
-    safe_channel = sanitize_for_pdf(channel_title)
-    
-    # Title Header
-    pdf.set_font("Helvetica", "B", 18)
-    pdf.cell(0, 10, "Audience Intelligence Executive Summary", ln=True, align="C")
-    pdf.set_font("Helvetica", "I", 10)
-    pdf.cell(0, 6, f"Generated for: {safe_title[:65]}...", ln=True, align="C")
-    pdf.cell(0, 6, f"Channel: {safe_channel}", ln=True, align="C")
-    pdf.ln(8)
-    
-    # KPI Section
-    pdf.set_font("Helvetica", "B", 14)
-    pdf.cell(0, 8, "1. Core Metrics & Audience Vibe", ln=True)
-    pdf.set_font("Helvetica", "", 10)
-    pdf.cell(0, 6, f"- Net Sentiment Score: {kpis.get('sentiment_score', 'N/A')}% Positive", ln=True)
-    pdf.cell(0, 6, f"- Dominant Intent: {sanitize_for_pdf(str(kpis.get('dominant_intent', 'N/A')))}", ln=True)
-    pdf.cell(0, 6, f"- Audience Vibe: {sanitize_for_pdf(str(kpis.get('audience_vibe', 'N/A')))}", ln=True)
-    pdf.ln(6)
-    
-    # Sentiment Clusters
-    pdf.set_font("Helvetica", "B", 14)
-    pdf.cell(0, 8, "2. Intent & Sentiment Breakdown", ln=True)
-    pdf.set_font("Helvetica", "", 10)
-    for c in clusters:
-        cat = sanitize_for_pdf(c.get('category', ''))
-        summary = sanitize_for_pdf(c.get('summary', ''))
-        pct = c.get('percentage', 0)
-        pdf.cell(0, 6, f"- {cat}: {pct}% | {summary}", ln=True)
-    pdf.ln(6)
-    
-    # Action Blueprint
-    pdf.set_font("Helvetica", "B", 14)
-    pdf.cell(0, 8, "3. Next Steps & Growth Blueprint", ln=True)
-    pdf.set_font("Helvetica", "", 10)
-    for idx, step in enumerate(blueprint, 1):
-        safe_step = sanitize_for_pdf(step)
-        pdf.multi_cell(0, 6, f"{idx}. {safe_step}")
-        
-    return bytes(pdf.output())
 
 # ---------------------------------------------------------
 # 4. Header UI
@@ -384,14 +406,17 @@ if "insights" in st.session_state:
         st.subheader("Audience Keyword Cloud & Frequent Terms")
         all_text = " ".join(comments)
         stopwords = set(STOPWORDS)
-        stopwords.update(["video", "channel", "sir", "bhai", "hai", "karo", "karein", "aap"])
+        stopwords.update(["video", "channel", "sir", "bhai", "hai", "karo", "karein", "aap", "the", "and"])
         
-        wc = WordCloud(width=800, height=350, background_color="#0e1117", stopwords=stopwords, colormap="Blues").generate(all_text)
-        fig_wc, ax = plt.subplots(figsize=(10, 4.5))
-        ax.imshow(wc, interpolation='bilinear')
-        ax.axis("off")
-        fig_wc.patch.set_facecolor('#0e1117')
-        st.pyplot(fig_wc)
+        try:
+            wc = WordCloud(width=800, height=350, background_color="#0e1117", stopwords=stopwords, colormap="Blues").generate(all_text)
+            fig_wc, ax = plt.subplots(figsize=(10, 4.5))
+            ax.imshow(wc, interpolation='bilinear')
+            ax.axis("off")
+            fig_wc.patch.set_facecolor('#0e1117')
+            st.pyplot(fig_wc)
+        except Exception:
+            st.info("Not enough text data to render word cloud.")
 
     # Tab 3: Demand Share
     with tabs[2]:
