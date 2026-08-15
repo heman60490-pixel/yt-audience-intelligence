@@ -5,3 +5,4 @@ groq
 pandas
 altair
 fpdf2
+plotly
