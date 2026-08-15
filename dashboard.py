@@ -6,10 +6,11 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from groq import Groq
 
 # ---------------------------------------------------------
-# 1. Page Configuration & Custom CSS Injection
+# 1. Page Configuration & Aggressive UI Cleanup CSS
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="YouTube Audience Intelligence Suite",
@@ -18,27 +19,35 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Hide Streamlit header, footer, profile avatar, and viewer badge
-custom_css = """
+hide_streamlit_completely = """
 <style>
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
+    /* 1. Complete removal of Top Header, Hamburger Menu & Streamlit Brand */
+    #MainMenu {visibility: hidden !important; display: none !important;}
+    header {visibility: hidden !important; display: none !important;}
+    footer {visibility: hidden !important; display: none !important;}
+    [data-testid="stDecoration"] {visibility: hidden !important; display: none !important;}
     
-    /* Hide top & bottom toolbar and profile icons */
-    [data-testid="stToolbar"] {visibility: hidden; display: none !important;}
-    [data-testid="stDecoration"] {visibility: hidden; display: none !important;}
-    [data-testid="stStatusWidget"] {visibility: hidden; display: none !important;}
-    div[class*="viewerBadge"] {display: none !important;}
+    /* 2. Target and completely remove the Bottom Status & Viewer Badges */
+    [data-testid="stStatusWidget"] {display: none !important; visibility: hidden !important;}
+    div[class*="viewerBadge"] {display: none !important; visibility: hidden !important;}
+    [data-testid="stViewerBadge"] {display: none !important; visibility: hidden !important;}
+    div[class*="profile"] {display: none !important; visibility: hidden !important;}
     div[data-testid="stBottomBlockContainer"] {display: none !important;}
-    div[class*="profile"] {display: none !important;}
-    button[title="View app in Streamlit Community Cloud"] {display: none !important;}
     
-    /* Modern Dark Theme Adjustments */
+    /* 3. Target bottom-right floating app badges, creator profiles, and toolbars */
+    [data-testid="stToolbar"] {display: none !important; visibility: hidden !important;}
+    [class^="FloatingApp"], [class*="viewer_badge"] {display: none !important;}
+    button[title="View app in Streamlit Community Cloud"] {display: none !important;}
+    div[data-testid="stToolbarActions"] {display: none !important;}
+    
+    /* 4. Streamlit layout padding optimization */
     .block-container {
-        padding-top: 2rem;
-        padding-bottom: 2rem;
+        padding-top: 1.5rem !important;
+        padding-bottom: 0rem !important;
+        max-width: 95% !important;
     }
+    
+    /* 5. Custom Card Styling */
     .metric-card {
         background-color: #161a24;
         border: 1px solid #232a3b;
@@ -48,10 +57,10 @@ custom_css = """
     }
 </style>
 """
-st.markdown(custom_css, unsafe_allow_html=True)
+st.markdown(hide_streamlit_completely, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. Key Management (Secrets + Fallback)
+# 2. Key Management (Secrets + Sidebar Fallback)
 # ---------------------------------------------------------
 groq_key = st.secrets.get("GROQ_API_KEY", os.getenv("GROQ_API_KEY", ""))
 yt_key = st.secrets.get("YOUTUBE_API_KEY", os.getenv("YOUTUBE_API_KEY", ""))
@@ -65,7 +74,7 @@ if not groq_key or not yt_key:
             yt_key = st.text_input("YouTube Data API Key", type="password", help="Enter YouTube API Key")
 
 if not groq_key or not yt_key:
-    st.warning("⚠️ Please provide both **GROQ_API_KEY** and **YOUTUBE_API_KEY** in Secrets or Sidebar to proceed.")
+    st.warning("⚠️ Please provide both **GROQ_API_KEY** and **YOUTUBE_API_KEY** in Secrets or the Sidebar to proceed.")
     st.stop()
 
 # Initialize Groq Client
@@ -75,30 +84,30 @@ client = Groq(api_key=groq_key)
 # 3. Helper Functions
 # ---------------------------------------------------------
 def extract_video_id(url: str) -> str:
-    """Extract standard or short YouTube video ID from URL."""
-    pattern = r"(?:v=|\/)([0-9A-Za-z_-]{11}).*"
+    """Extract standard, share, or short YouTube video ID from URL."""
+    pattern = r"(?:v=|\/|youtu\.be\/)([0-9A-Za-z_-]{11})"
     match = re.search(pattern, url)
     return match.group(1) if match else None
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=86400, show_spinner=False)
 def fetch_youtube_data(video_id: str, api_key: str, max_comments: int = 150):
-    """Fetch video metadata and top-level comments."""
-    youtube = build("youtube", "v3", developerKey=api_key)
-    
-    # 1. Fetch Video Details
-    vid_response = youtube.videos().list(
-        part="snippet,statistics",
-        id=video_id
-    ).execute()
-    
-    if not vid_response.get("items"):
-        return None, None
-    
-    video_details = vid_response["items"][0]["snippet"]
-    
-    # 2. Fetch Comments
-    comments = []
+    """Fetch video metadata and top-level comments with error handling."""
     try:
+        youtube = build("youtube", "v3", developerKey=api_key)
+        
+        # 1. Fetch Video Details
+        vid_response = youtube.videos().list(
+            part="snippet,statistics",
+            id=video_id
+        ).execute()
+        
+        if not vid_response.get("items"):
+            return None, None
+        
+        video_details = vid_response["items"][0]["snippet"]
+        
+        # 2. Fetch Comments
+        comments = []
         req = youtube.commentThreads().list(
             part="snippet",
             videoId=video_id,
@@ -112,16 +121,26 @@ def fetch_youtube_data(video_id: str, api_key: str, max_comments: int = 150):
                 comment = item["snippet"]["topLevelComment"]["snippet"]["textDisplay"]
                 comments.append(comment)
             req = youtube.commentThreads().list_next(req, res)
-    except Exception as e:
-        pass
-    
-    return video_details, comments
+            
+        return video_details, comments
 
+    except HttpError as e:
+        if e.resp.status == 403:
+            st.error("⚠️ YouTube API Quota limit reached or invalid API Key.")
+        else:
+            st.error(f"⚠️ YouTube API Error: {str(e)}")
+        return None, None
+    except Exception as e:
+        st.error(f"⚠️ Error fetching data: {str(e)}")
+        return None, None
+
+@st.cache_data(ttl=86400, show_spinner=False)
 def run_groq_intelligence(comments: list, video_title: str) -> dict:
-    """Analyze comments using Groq Llama 3.3 70B."""
+    """Analyze comments using Groq Llama 3.3 70B with Hinglish/Multilingual awareness."""
     prompt = f"""
     You are an expert Audience Intelligence Analyst.
     Analyze the following {len(comments)} YouTube comments for the video: "{video_title}".
+    Note: Understand Hinglish, Hindi in Roman/Devanagari script, slang, and English contextually.
 
     Categorize and provide deep strategic synthesis in pure JSON format with the following keys:
     1. "clusters": List of objects with keys "category" (e.g. "Praise & High Value", "Content Requests & Ideas", "Critique & Flaws", "Confusion / Doubts"), "percentage" (number summing up to 100), "summary" (brief description).
@@ -134,7 +153,7 @@ def run_groq_intelligence(comments: list, video_title: str) -> dict:
     Comments Sample:
     {json.dumps(comments[:120], ensure_ascii=False)}
 
-    Output STRICTLY raw JSON only (no backticks, no Markdown formatting).
+    Output STRICTLY raw JSON only.
     """
 
     response = client.chat.completions.create(
@@ -184,7 +203,6 @@ if analyze_pressed and yt_input_url:
         video_details, comments = fetch_youtube_data(video_id, yt_key)
         
         if not video_details:
-            st.error("Failed to load video details. Please verify your API Key and Video ID.")
             st.stop()
             
         if not comments:
@@ -203,7 +221,7 @@ if "insights" in st.session_state:
 
     st.markdown("---")
     
-    # Video Card Info
+    # Video Overview Card
     c1, c2, c3 = st.columns([2, 5, 2])
     with c1:
         st.image(vid_meta["thumbnails"]["high"]["url"], use_container_width=True)
@@ -253,7 +271,6 @@ if "insights" in st.session_state:
         if clusters:
             df_clusters = pd.DataFrame(clusters)
             
-            # Donut Chart
             fig = px.pie(
                 df_clusters,
                 names="category",
@@ -269,7 +286,6 @@ if "insights" in st.session_state:
             )
             st.plotly_chart(fig, use_container_width=True)
 
-            # Detailed Cards
             for item in clusters:
                 st.markdown(f"""
                 <div class="metric-card">
